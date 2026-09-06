@@ -24,6 +24,12 @@ import yt_dlp as youtube_dl
 from botamusique.database import SettingsDatabase
 
 YT_PKG_NAME = 'yt-dlp'
+# Install/upgrade with the `default` extra so the companion EJS challenge
+# solver package (yt-dlp-ejs) stays installed and version-matched.
+# See https://github.com/yt-dlp/yt-dlp/wiki/EJS — bare `yt-dlp` upgrades
+# leave yt-dlp-ejs behind, and yt-dlp then ignores the outdated solver,
+# causing "n challenge solving failed" on YouTube downloads.
+YT_PKG_SPEC = 'yt-dlp[default]'
 
 log = logging.getLogger("bot")
 
@@ -88,9 +94,9 @@ def update() -> str:
 
     uv = shutil.which('uv')
     if uv:
-        cmd = [uv, 'pip', 'install', '--upgrade', YT_PKG_NAME]
+        cmd = [uv, 'pip', 'install', '--upgrade', YT_PKG_SPEC]
     else:
-        cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade', YT_PKG_NAME]
+        cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade', YT_PKG_SPEC]
 
     subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

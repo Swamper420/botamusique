@@ -47,6 +47,7 @@ Predicted functionalities will be those people would expect from any classic mus
 2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
 3. Install [Opus Codec](https://www.opus-codec.org/) (which should be already installed if you installed Mumble or Murmur, or you may try to install `opus-tools` with your package manager).
 4. Install ffmpeg. If ffmpeg isn't in your package manager, you may need to find another source. I personally use [this repository](http://repozytorium.mati75.eu/) on my raspberry.
+5. Install [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.3.0 or higher (required by yt-dlp to solve YouTube's JavaScript challenges; see [yt-dlp EJS setup](https://github.com/yt-dlp/yt-dlp/wiki/EJS)). The Docker image already bundles it. Make sure the `deno` binary is in the `PATH` of the user running the bot. Python EJS solver scripts ship with the `yt-dlp[default]` dependency (already in `pyproject.toml`), so a plain `uv sync` is enough on the Python side.
 
 
 ### Docker
