@@ -21,6 +21,7 @@ import logging
 import re
 from configparser import ConfigParser
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 log = logging.getLogger("bot")
 
@@ -57,10 +58,30 @@ def _extract_url(raw: str) -> str:
             string = res.group(1)
         else:
             return ""
-    match = re.search(r"(http|https)://(\S*)?/(\S*)", string, flags=re.IGNORECASE)
-    if match:
-        return html.unescape(match[1].lower() + "://" + match[2].lower() + "/" + match[3])
-    return ""
+    match = re.search(r"https?://\S+", string, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    url = html.unescape(match[0])
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    if not parts.hostname:
+        return ""
+    # Only scheme and host are case-insensitive (RFC 3986). Path, query
+    # and fragment must keep their case (mirrors util.get_url_from_input).
+    host = parts.hostname.lower()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = host
+    if parts.port:
+        netloc += f":{parts.port}"
+    if parts.username:
+        userinfo = parts.username
+        if parts.password:
+            userinfo += f":{parts.password}"
+        netloc = f"{userinfo}@{netloc}"
+    return urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, parts.fragment))
 
 
 def validate_url(url: str) -> str:

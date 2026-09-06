@@ -17,6 +17,7 @@ import zipfile
 from configparser import ConfigParser
 from importlib import reload
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import yt_dlp as youtube_dl
@@ -206,12 +207,33 @@ def get_url_from_input(string: str) -> str:
         else:
             return ""
 
-    if match := re.search("(http|https)://(\\S*)?/(\\S*)", string, flags=re.IGNORECASE):
-        url = match[1].lower() + "://" + match[2].lower() + "/" + match[3]
-        # https://github.com/mumble-voip/mumble/issues/4999
-        return html.unescape(url)
-    else:
+    match = re.search(r"https?://\S+", string, flags=re.IGNORECASE)
+    if not match:
         return ""
+    # https://github.com/mumble-voip/mumble/issues/4999
+    url = html.unescape(match[0])
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    if not parts.hostname:
+        return ""
+    # Only scheme and host are case-insensitive (RFC 3986). Path, query
+    # and fragment must keep their case: some servers (e.g. Icecast)
+    # serve case-sensitive paths, so lowercasing them breaks the URL
+    # (e.g. .../radio/YleX/... must not become .../radio/ylex/...).
+    host = parts.hostname.lower()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = host
+    if parts.port:
+        netloc += f":{parts.port}"
+    if parts.username:
+        userinfo = parts.username
+        if parts.password:
+            userinfo += f":{parts.password}"
+        netloc = f"{userinfo}@{netloc}"
+    return urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, parts.fragment))
 
 
 def youtube_search(query: str, config: ConfigParser) -> list[list[str]] | bool:

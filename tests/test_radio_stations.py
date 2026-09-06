@@ -83,6 +83,28 @@ def test_validate_url_extracts_from_anchor():
     assert url.startswith("http://example.com")
 
 
+def test_validate_url_preserves_path_case():
+    # Regression test: Icecast mount paths can be case-sensitive.
+    # .../radio/YleX/... must not become .../radio/ylex/... (was 404).
+    url = radio_stations.validate_url("https://icecast.live.yle.fi/radio/YleX/icecast.audio")
+    assert url == "https://icecast.live.yle.fi/radio/YleX/icecast.audio"
+
+
+def test_validate_url_lowercases_only_scheme_and_host():
+    url = radio_stations.validate_url("HTTP://EXAMPLE.COM/Path/To/STREAM?Token=AbC")
+    assert url == "http://example.com/Path/To/STREAM?Token=AbC"
+
+
+def test_validate_url_unescapes_entities():
+    url = radio_stations.validate_url("https://example.com/?a=1&amp;b=2")
+    assert url == "https://example.com/?a=1&b=2"
+
+
+def test_validate_url_preserves_port():
+    url = radio_stations.validate_url("http://example.com:8000/Stream")
+    assert url == "http://example.com:8000/Stream"
+
+
 # ---------------------------------------------------------------------------
 # config parsing
 # ---------------------------------------------------------------------------

@@ -566,7 +566,9 @@ def cmd_rb_play(bot: MumbleBot, user: str, text: Any, command: str, parameter: s
         bitrate = rstation[0]['bitrate']
         genre = rstation[0]['tags']
         homepage = rstation[0]['homepage']
-        url = rstation[0]['url']
+        # url_resolved is radio-browser's last known working URL; url is
+        # the original (possibly stale) one. Same preference as web search.
+        url = rstation[0].get('url_resolved') or rstation[0]['url']
         msg = 'Radio station added to playlist:'
 
         msg += '<table><tr><th>ID</th><th>Station Name</th><th>Genre</th><th>Codec/Bitrate</th><th>Country</th><th>Homepage</th></tr>' + \
