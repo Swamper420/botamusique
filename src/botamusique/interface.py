@@ -16,6 +16,7 @@ from flask import Flask, Blueprint, render_template, request, redirect, send_fil
 from werkzeug.utils import secure_filename
 
 from botamusique import media
+from botamusique import radio_stations
 from botamusique import util
 from botamusique.database import Condition
 from botamusique.media.file import FileItem
@@ -734,6 +735,79 @@ def library() -> Response:
 
     else:
         abort(400)
+
+
+@bp.route('/radio', methods=["GET"])
+@requires_auth
+def radio_list() -> Response:
+    stations = radio_stations.get_radio_stations(_bot.config, _bot.db)
+    return jsonify({'stations': stations})
+
+
+@bp.route('/radio', methods=["POST"])
+@requires_auth
+def radio_manage() -> Response:
+    global log
+    payload = request.get_json(silent=True) if request.is_json else request.form
+    if not payload:
+        abort(400)
+    # request.form values are strings; JSON may already be parsed.
+    action = payload.get('action', '')
+    if action == 'add':
+        name = (payload.get('name') or '').strip()
+        url = (payload.get('url') or '').strip()
+        if not name or not url:
+            return jsonify({'error': 'Name and URL are required.'}), 400
+        try:
+            station = radio_stations.add_radio_station(_bot.db, name, url)
+        except radio_stations.RadioStationError as e:
+            return jsonify({'error': str(e)}), 400
+        log.info("web: user %s (%s) saved radio station %s -> %s"
+                 % (user, request.remote_addr, station['name'], station['url']))
+        return jsonify({'stations': radio_stations.get_radio_stations(_bot.config, _bot.db)})
+    elif action == 'delete':
+        name = (payload.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'Name is required.'}), 400
+        if not radio_stations.delete_radio_station(_bot.db, name):
+            return jsonify({'error': f"Station '{name}' not found."}), 404
+        log.info("web: user %s (%s) deleted radio station %s" % (user, request.remote_addr, name))
+        return jsonify({'stations': radio_stations.get_radio_stations(_bot.config, _bot.db)})
+    else:
+        abort(400)
+
+
+@bp.route('/radiobrowser/search', methods=["GET"])
+@requires_auth
+def radiobrowser_search() -> Response:
+    query = (request.args.get('q') or '').strip()
+    if not query:
+        return jsonify({'stations': []})
+    try:
+        limit = int(request.args.get('limit', '20'))
+    except ValueError:
+        limit = 20
+    limit = max(1, min(limit, 50))
+    try:
+        from pyradios import RadioBrowser
+        rb = RadioBrowser()
+        results = rb.search(name=query, name_exact=False, hidebroken=True)
+    except Exception as e:
+        log.warning("web: radio-browser search failed for %r: %s" % (query, e))
+        return jsonify({'error': 'Radio-Browser search failed.'}), 502
+    stations = []
+    for s in (results or [])[:limit]:
+        stations.append({
+            'stationuuid': s.get('stationuuid', ''),
+            'name': s.get('name', ''),
+            'url': s.get('url_resolved') or s.get('url', ''),
+            'homepage': s.get('homepage', ''),
+            'codec': s.get('codec', ''),
+            'bitrate': s.get('bitrate', 0),
+            'countrycode': s.get('countrycode', ''),
+            'tags': s.get('tags', ''),
+        })
+    return jsonify({'stations': stations})
 
 
 @bp.route('/upload', methods=["POST"])

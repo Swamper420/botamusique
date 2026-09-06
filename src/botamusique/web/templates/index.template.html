@@ -402,7 +402,27 @@
                     <div class="input-group mb-3" id="add-radio-container">
                         <label class="input-group-text" for="radio-url-input">{{ tr('add_radio_url') }}</label>
                         <input type="text" class="form-control" id="radio-url-input" placeholder="{{ tr('radio_url_placeholder') }}" aria-label="{{ tr('radio_url_placeholder') }}">
-                        <button type="button" class="btn btn-primary">{{ tr('add_radio') }}</button>
+                        <button type="button" class="btn btn-primary" id="radio-play-btn">{{ tr('add_radio') }}</button>
+                    </div>
+                    <div class="mb-3">
+                        <h4 class="h6">{{ tr('saved_radio_stations') }}</h4>
+                        <ul id="radio-saved-list" class="list-group mb-2"></ul>
+                        <div id="radio-saved-empty" class="text-muted small">{{ tr('no_saved_radios') }}</div>
+                        <div class="input-group mb-3" id="save-radio-container">
+                            <label class="input-group-text" for="radio-save-name">{{ tr('radio_name') }}</label>
+                            <input type="text" class="form-control" id="radio-save-name" placeholder="{{ tr('radio_name_placeholder') }}" aria-label="{{ tr('radio_name_placeholder') }}">
+                            <input type="text" class="form-control" id="radio-save-url" placeholder="{{ tr('radio_url_placeholder') }}" aria-label="{{ tr('radio_url_placeholder') }}">
+                            <button type="button" class="btn btn-secondary" id="radio-save-btn">{{ tr('save_radio') }}</button>
+                        </div>
+                        <div id="radio-save-error" class="text-danger small" style="display: none;"></div>
+                    </div>
+                    <div class="mb-3">
+                        <h4 class="h6">{{ tr('radio_browser_search') }}</h4>
+                        <div class="input-group mb-2" id="radiobrowser-container">
+                            <input type="text" class="form-control" id="radiobrowser-query" placeholder="{{ tr('radio_browser_placeholder') }}" aria-label="{{ tr('radio_browser_placeholder') }}">
+                            <button type="button" class="btn btn-secondary" id="radiobrowser-search-btn">{{ tr('search') }}</button>
+                        </div>
+                        <div id="radiobrowser-results" class="list-group"></div>
                     </div>
                 </div>
             </div>

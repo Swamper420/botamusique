@@ -5,6 +5,7 @@ import {
   secondsToStr,
 } from './lib/util.mjs';
 import {limitChars} from './lib/text.mjs';
+import {initRadio} from './lib/radio.mjs';
 
 
 // ----------------------
@@ -936,10 +937,12 @@ document.getElementById('add-music-url').querySelector('button').addEventListene
   musicUrlInput.value = '';
 });
 
-document.getElementById('add-radio-url').querySelector('button').addEventListener('click', () => {
+document.getElementById('radio-play-btn').addEventListener('click', () => {
   request('post', {add_radio: radioUrlInput.value});
   radioUrlInput.value = '';
 });
+
+initRadio();
 
 // ---------------------
 // ------  Player ------

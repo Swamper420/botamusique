@@ -11,6 +11,7 @@ from pyradios import RadioBrowser
 
 import pymumble_py3 as pymumble
 from botamusique import media
+from botamusique import radio_stations
 from botamusique import util
 from botamusique.constants import commands
 from botamusique.constants import tr_cli as tr
@@ -44,6 +45,8 @@ def register_all_commands(bot: MumbleBot) -> None:
     bot.register_command(commands('play_file_match', bot.config), cmd_play_file_match)
     bot.register_command(commands('play_playlist', bot.config), cmd_play_playlist)
     bot.register_command(commands('play_radio', bot.config), cmd_play_radio)
+    bot.register_command(commands('radio_add', bot.config), cmd_radio_add, admin=True)
+    bot.register_command(commands('radio_delete', bot.config), cmd_radio_delete, admin=True)
     bot.register_command(commands('play_tag', bot.config), cmd_play_tags)
     bot.register_command(commands('play_url', bot.config), cmd_play_url)
     bot.register_command(commands('queue', bot.config), cmd_queue)
@@ -432,19 +435,20 @@ def cmd_play_radio(bot: MumbleBot, user: str, text: Any, command: str, parameter
     global log
 
     if not parameter:
-        all_radio = bot.config.items('radio')
+        stations = radio_stations.get_radio_stations(bot.config, bot.db)
         msg = tr('preconfigurated_radio')
-        for i in all_radio:
-            comment = ""
-            if len(i[1].split(maxsplit=1)) == 2:
-                comment = " - " + i[1].split(maxsplit=1)[1]
-            msg += "<br />" + i[0] + comment
+        for station in stations:
+            suffix = ""
+            if station['comment']:
+                suffix = " - " + station['comment']
+            elif station['url'] and station['source'] == 'db':
+                suffix = " - " + station['url']
+            msg += "<br />" + station['name'] + suffix
         bot.send_msg(msg, text)
     else:
-        if bot.config.has_option('radio', parameter):
-            parameter = bot.config.get('radio', parameter)
-            parameter = parameter.split()[0]
-        url = util.get_url_from_input(parameter)
+        url = radio_stations.resolve_radio_url(parameter.strip(), bot.config, bot.db)
+        if url is None:
+            url = util.get_url_from_input(parameter)
         if url:
             music_wrapper = bot.cache.get_cached_wrapper_from_scrap(type='radio', url=url, user=user)
 
@@ -453,6 +457,37 @@ def cmd_play_radio(bot: MumbleBot, user: str, text: Any, command: str, parameter
             send_item_added_message(bot, music_wrapper, len(bot.playlist) - 1, text)
         else:
             bot.send_msg(tr('bad_url'), text)
+
+
+def cmd_radio_add(bot: MumbleBot, user: str, text: Any, command: str, parameter: str) -> None:
+    global log
+
+    parts = (parameter or "").strip().split(None, 1)
+    if len(parts) != 2:
+        bot.send_msg(tr('bad_parameter', command=command), text)
+        return
+    name, url = parts
+    try:
+        station = radio_stations.add_radio_station(bot.db, name, url)
+    except radio_stations.RadioStationError as e:
+        bot.send_msg(tr('radio_add_failed', error=str(e)), text)
+        return
+    log.info(f"cmd: saved radio station '{station['name']}' -> {station['url']} by {user}")
+    bot.send_msg(tr('radio_added', name=station['name'], url=station['url']), text)
+
+
+def cmd_radio_delete(bot: MumbleBot, user: str, text: Any, command: str, parameter: str) -> None:
+    global log
+
+    name = (parameter or "").strip().split(None, 1)[0] if (parameter or "").strip() else ""
+    if not name:
+        bot.send_msg(tr('bad_parameter', command=command), text)
+        return
+    if radio_stations.delete_radio_station(bot.db, name):
+        log.info(f"cmd: deleted radio station '{name}' by {user}")
+        bot.send_msg(tr('radio_deleted', name=name), text)
+    else:
+        bot.send_msg(tr('radio_not_found', name=name), text)
 
 
 def cmd_rb_query(bot: MumbleBot, user: str, text: Any, command: str, parameter: str) -> None:

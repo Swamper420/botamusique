@@ -403,7 +403,27 @@
                     <div class="input-group mb-3" id="add-radio-container">
                         <label class="input-group-text" for="radio-url-input">Aggiungi URL Radio</label>
                         <input type="text" class="form-control" id="radio-url-input" placeholder="URL Radio..." aria-label="URL Radio...">
-                        <button type="button" class="btn btn-primary">Aggiungi Radio</button>
+                        <button type="button" class="btn btn-primary" id="radio-play-btn">Aggiungi Radio</button>
+                    </div>
+                    <div class="mb-3">
+                        <h4 class="h6">Saved Radio Stations</h4>
+                        <ul id="radio-saved-list" class="list-group mb-2"></ul>
+                        <div id="radio-saved-empty" class="text-muted small">No saved stations yet.</div>
+                        <div class="input-group mb-3" id="save-radio-container">
+                            <label class="input-group-text" for="radio-save-name">Name</label>
+                            <input type="text" class="form-control" id="radio-save-name" placeholder="Station name..." aria-label="Station name...">
+                            <input type="text" class="form-control" id="radio-save-url" placeholder="URL Radio..." aria-label="URL Radio...">
+                            <button type="button" class="btn btn-secondary" id="radio-save-btn">Save</button>
+                        </div>
+                        <div id="radio-save-error" class="text-danger small" style="display: none;"></div>
+                    </div>
+                    <div class="mb-3">
+                        <h4 class="h6">Search Radio-Browser</h4>
+                        <div class="input-group mb-2" id="radiobrowser-container">
+                            <input type="text" class="form-control" id="radiobrowser-query" placeholder="Station name..." aria-label="Station name...">
+                            <button type="button" class="btn btn-secondary" id="radiobrowser-search-btn">Search</button>
+                        </div>
+                        <div id="radiobrowser-results" class="list-group"></div>
                     </div>
                 </div>
             </div>
