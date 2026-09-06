@@ -509,12 +509,42 @@ def check_extra_config(config: ConfigParser, template: ConfigParser) -> list[tup
 
 
 def parse_cookie_file(cookiefile: str) -> dict[str, str]:
-    # https://stackoverflow.com/a/54659484/1584825
+    # Netscape HTTP Cookie File format (as written by curl/yt-dlp/browsers):
+    #   domain \t flag \t path \t secure \t expiration \t name \t value
+    # Be tolerant: skip blank lines, comments, and malformed lines instead of
+    # raising IndexError (e.g. files exported by yt-dlp contain blank lines
+    # and "#HttpOnly" prefixed lines).
 
     cookies = {}
-    with open(cookiefile, 'r') as fp:
-        for line in fp:
-            if not re.match(r'^#', line):
-                lineFields = line.strip().split('\t')
-                cookies[lineFields[5]] = lineFields[6]
+    try:
+        with open(cookiefile, 'r', encoding='utf-8', errors='ignore') as fp:
+            for lineno, raw_line in enumerate(fp, 1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith('#HttpOnly'):
+                    # Actual cookie line with the HttpOnly prefix, e.g.
+                    # "#HttpOnly.youtube.com\tTRUE\t/..."
+                    line = line[len('#HttpOnly'):].lstrip()
+                    if not line:
+                        continue
+                elif line.startswith('#'):
+                    continue
+
+                lineFields = line.split('\t')
+                if len(lineFields) < 7:
+                    # Some exporters separate with spaces instead of tabs.
+                    lineFields = line.split()
+                if len(lineFields) < 7:
+                    log.warning("util: skipping malformed line %d in cookie file %s" % (lineno, cookiefile))
+                    continue
+
+                name = lineFields[5]
+                value = lineFields[6]
+                if not name:
+                    continue
+                cookies[name] = value
+    except (FileNotFoundError, OSError) as e:
+        log.warning("util: cannot read cookie file %s (%s), continuing without cookies" % (cookiefile, e))
+        return {}
     return cookies
