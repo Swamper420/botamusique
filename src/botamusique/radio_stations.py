@@ -23,6 +23,8 @@ from configparser import ConfigParser
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from rapidfuzz import fuzz, process
+
 log = logging.getLogger("bot")
 
 DB_SECTION = "radio"
@@ -194,13 +196,38 @@ def resolve_radio_url(name: str, config: ConfigParser, db: Any) -> str | None:
 
 
 def resolve_radio_station(name: str, config: ConfigParser, db: Any) -> dict[str, str] | None:
-    """Case-insensitive lookup of a station. Returns the station dict or None."""
+    """Fuzzy lookup of a station. Returns the station dict or None.
+
+    First tries an exact case-insensitive match. If that fails, uses
+    rapidfuzz to find the closest match above a similarity threshold.
+    """
     if not name:
         return None
     key = name.strip().lower()
-    for station in get_radio_stations(config, db):
+    stations = get_radio_stations(config, db)
+    if not stations:
+        return None
+
+    # Exact case-insensitive match (preserve existing behavior)
+    for station in stations:
         if station["name"].lower() == key:
             return station
+
+    # Fuzzy match using rapidfuzz
+    station_names = [s["name"] for s in stations]
+    result = process.extractOne(
+        key,
+        station_names,
+        scorer=fuzz.token_sort_ratio,
+        score_cutoff=70,
+    )
+    if result:
+        match_name, score, _idx = result
+        # Return the station with the matching name
+        for station in stations:
+            if station["name"] == match_name:
+                return station
+
     return None
 
 
