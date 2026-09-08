@@ -213,20 +213,18 @@ def resolve_radio_station(name: str, config: ConfigParser, db: Any) -> dict[str,
         if station["name"].lower() == key:
             return station
 
-    # Fuzzy match using rapidfuzz
+    # Fuzzy match using rapidfuzz (lowercase both sides for case-insensitive matching)
     station_names = [s["name"] for s in stations]
+    lowered_names = [n.lower() for n in station_names]
     result = process.extractOne(
         key,
-        station_names,
+        lowered_names,
         scorer=fuzz.partial_ratio,
         score_cutoff=60,
     )
     if result:
-        match_name, score, _idx = result
-        # Return the station with the matching name
-        for station in stations:
-            if station["name"] == match_name:
-                return station
+        _match_lowered, _score, idx = result
+        return stations[idx]
 
     return None
 
