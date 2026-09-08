@@ -59,9 +59,16 @@ class FakeDb:
 def test_validate_name_ok():
     assert radio_stations.validate_name("jazz") == "jazz"
     assert radio_stations.validate_name("  Rock-88_x ") == "Rock-88_x"
+    # Unicode, spaces and punctuation are allowed (web UI editable names).
+    assert radio_stations.validate_name("Jazz Yeah !") == "Jazz Yeah !"
+    assert radio_stations.validate_name("Bärmix Öl-Radio") == "Bärmix Öl-Radio"
+    assert radio_stations.validate_name("café") == "café"
+    assert radio_stations.validate_name("dot.name") == "dot.name"
+    assert radio_stations.validate_name("has space") == "has space"
+    assert radio_stations.validate_name("semi;colon") == "semi;colon"
 
 
-@pytest.mark.parametrize("bad", ["", "has space", "semi;colon", "a" * 65, "café", "dot.name"])
+@pytest.mark.parametrize("bad", ["", "   ", "a" * 65, "bad<name>", "a>b", "line\nbreak", "tab\there"])
 def test_validate_name_rejects(bad):
     with pytest.raises(radio_stations.RadioStationError):
         radio_stations.validate_name(bad)
@@ -218,7 +225,63 @@ def test_delete_missing_returns_false(tmp_path):
 def test_add_invalid_raises_and_stores_nothing(tmp_path):
     db = _settings_db(tmp_path)
     with pytest.raises(radio_stations.RadioStationError):
-        radio_stations.add_radio_station(db, "bad name", "http://example.com/s")
+        radio_stations.add_radio_station(db, "bad<name>", "http://example.com/s")
     with pytest.raises(radio_stations.RadioStationError):
         radio_stations.add_radio_station(db, "good", "not a url")
     assert radio_stations.get_radio_stations(_config_with_radio({}), db) == []
+
+
+def test_add_unicode_name_roundtrip(tmp_path):
+    config = _config_with_radio({})
+    db = _settings_db(tmp_path)
+    station = radio_stations.add_radio_station(db, "Bärmix Öl-Radio", "http://example.com/stream")
+    assert station["name"] == "Bärmix Öl-Radio"
+    assert radio_stations.resolve_radio_url("bärmix öl-radio", config, db) == station["url"]
+    stations = radio_stations.get_radio_stations(config, db)
+    assert stations[0]["name"] == "Bärmix Öl-Radio"
+
+
+def test_rename_ok(tmp_path):
+    config = _config_with_radio({})
+    db = _settings_db(tmp_path)
+    radio_stations.add_radio_station(db, "jazz", "http://example.com/jazz")
+    station = radio_stations.rename_radio_station(db, "jazz", "Bärmix Öl-Radio")
+    assert station["name"] == "Bärmix Öl-Radio"
+    assert station["url"] == "http://example.com/jazz"
+    assert radio_stations.resolve_radio_url("JAZZ", config, db) is None
+    assert radio_stations.resolve_radio_url("bärmix öl-radio", config, db) == "http://example.com/jazz"
+
+
+def test_rename_with_new_url(tmp_path):
+    config = _config_with_radio({})
+    db = _settings_db(tmp_path)
+    radio_stations.add_radio_station(db, "jazz", "http://example.com/jazz")
+    station = radio_stations.rename_radio_station(db, "JAZZ", "Jazz 24", "http://example.com/jazz24")
+    assert station["name"] == "Jazz 24"
+    assert station["url"] == "http://example.com/jazz24"
+    assert radio_stations.resolve_radio_url("jazz 24", config, db) == "http://example.com/jazz24"
+
+
+def test_rename_missing_raises(tmp_path):
+    db = _settings_db(tmp_path)
+    with pytest.raises(radio_stations.RadioStationError):
+        radio_stations.rename_radio_station(db, "nope", "new name")
+
+
+def test_rename_duplicate_raises(tmp_path):
+    db = _settings_db(tmp_path)
+    radio_stations.add_radio_station(db, "one", "http://example.com/1")
+    radio_stations.add_radio_station(db, "two", "http://example.com/2")
+    with pytest.raises(radio_stations.RadioStationError):
+        radio_stations.rename_radio_station(db, "one", "TWO")
+
+
+def test_resolve_station_returns_display_name(tmp_path):
+    config = _config_with_radio({})
+    db = _settings_db(tmp_path)
+    radio_stations.add_radio_station(db, "MyStation", "http://example.com/stream")
+    station = radio_stations.resolve_radio_station("mystation", config, db)
+    assert station is not None
+    assert station["name"] == "MyStation"
+    assert station["url"] == "http://example.com/stream"
+    assert radio_stations.resolve_radio_station("missing", config, db) is None

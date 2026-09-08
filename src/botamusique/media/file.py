@@ -150,7 +150,7 @@ class FileItem(BaseItem):
 
     @staticmethod
     def _prepare_thumbnail(im: Image.Image) -> str:
-        im.thumbnail((100, 100), Image.LANCZOS)
+        im.thumbnail((512, 512), Image.LANCZOS)
         buffer = BytesIO()
         im = im.convert('RGB')
         im.save(buffer, format="JPEG")
@@ -181,7 +181,7 @@ class FileItem(BaseItem):
     def format_current_playing(self, user: str) -> str:
         display = tr("now_playing", item=self.format_song_string(user))
         if self.thumbnail:
-            thumbnail_html = '<img width="80" src="data:image/jpge;base64,' + \
+            thumbnail_html = '<img width="512" src="data:image/jpeg;base64,' + \
                              self.thumbnail + '"/>'
             display += "<br />" + thumbnail_html
 

@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import datetime
+import html
 import json
 import logging
 import re
@@ -440,17 +441,21 @@ def cmd_play_radio(bot: MumbleBot, user: str, text: Any, command: str, parameter
         for station in stations:
             suffix = ""
             if station['comment']:
-                suffix = " - " + station['comment']
+                suffix = " - " + html.escape(station['comment'], quote=False)
             elif station['url'] and station['source'] == 'db':
-                suffix = " - " + station['url']
-            msg += "<br />" + station['name'] + suffix
+                suffix = " - " + html.escape(station['url'], quote=False)
+            msg += "<br />" + html.escape(station['name'], quote=False) + suffix
         bot.send_msg(msg, text)
     else:
-        url = radio_stations.resolve_radio_url(parameter.strip(), bot.config, bot.db)
-        if url is None:
-            url = util.get_url_from_input(parameter)
+        station = radio_stations.resolve_radio_station(parameter.strip(), bot.config, bot.db)
+        url = station["url"] if station else util.get_url_from_input(parameter)
         if url:
-            music_wrapper = bot.cache.get_cached_wrapper_from_scrap(type='radio', url=url, user=user)
+            kwargs: dict[str, Any] = {'type': 'radio', 'url': url, 'user': user}
+            if station:
+                # Preserve the saved (possibly renamed) display name instead
+                # of re-fetching a server description from the network.
+                kwargs['name'] = station["name"]
+            music_wrapper = bot.cache.get_cached_wrapper_from_scrap(**kwargs)
 
             bot.playlist.append(music_wrapper)
             log.info("cmd: add to playlist: " + music_wrapper.format_debug_string())
@@ -470,10 +475,11 @@ def cmd_radio_add(bot: MumbleBot, user: str, text: Any, command: str, parameter:
     try:
         station = radio_stations.add_radio_station(bot.db, name, url)
     except radio_stations.RadioStationError as e:
-        bot.send_msg(tr('radio_add_failed', error=str(e)), text)
+        bot.send_msg(tr('radio_add_failed', error=html.escape(str(e), quote=False)), text)
         return
     log.info(f"cmd: saved radio station '{station['name']}' -> {station['url']} by {user}")
-    bot.send_msg(tr('radio_added', name=station['name'], url=station['url']), text)
+    bot.send_msg(tr('radio_added', name=html.escape(station['name'], quote=False),
+                    url=html.escape(station['url'], quote=False)), text)
 
 
 def cmd_radio_delete(bot: MumbleBot, user: str, text: Any, command: str, parameter: str) -> None:
@@ -485,9 +491,9 @@ def cmd_radio_delete(bot: MumbleBot, user: str, text: Any, command: str, paramet
         return
     if radio_stations.delete_radio_station(bot.db, name):
         log.info(f"cmd: deleted radio station '{name}' by {user}")
-        bot.send_msg(tr('radio_deleted', name=name), text)
+        bot.send_msg(tr('radio_deleted', name=html.escape(name, quote=False)), text)
     else:
-        bot.send_msg(tr('radio_not_found', name=name), text)
+        bot.send_msg(tr('radio_not_found', name=html.escape(name, quote=False)), text)
 
 
 def cmd_rb_query(bot: MumbleBot, user: str, text: Any, command: str, parameter: str) -> None:

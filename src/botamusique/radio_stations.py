@@ -27,7 +27,12 @@ log = logging.getLogger("bot")
 
 DB_SECTION = "radio"
 
-_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+NAME_MAX_LEN = 64
+# Control characters and angle brackets would break Mumble chat HTML
+# rendering (station names are embedded raw in <b>...</b> messages).
+# Everything else — including unicode letters like äöü, spaces and
+# punctuation — is allowed.
+_FORBIDDEN_NAME_CHARS_RE = re.compile(r"[\x00-\x1f\x7f<>]")
 
 
 class RadioStationError(ValueError):
@@ -35,12 +40,16 @@ class RadioStationError(ValueError):
 
 
 def validate_name(name: str) -> str:
-    name = (name or "").strip()
-    if not _NAME_RE.match(name):
+    clean = (name or "").strip()
+    if not clean or len(clean) > NAME_MAX_LEN:
         raise RadioStationError(
-            "Invalid station name. Use 1-64 chars: letters, numbers, '_' or '-'."
+            "Invalid station name. Use 1-64 characters."
         )
-    return name
+    if _FORBIDDEN_NAME_CHARS_RE.search(clean):
+        raise RadioStationError(
+            "Invalid station name. Characters '<', '>' and control characters are not allowed."
+        )
+    return clean
 
 
 def _extract_url(raw: str) -> str:
@@ -173,12 +182,18 @@ def get_radio_stations(config: ConfigParser, db: Any) -> list[dict[str, str]]:
 
 def resolve_radio_url(name: str, config: ConfigParser, db: Any) -> str | None:
     """Case-insensitive lookup of a station name. Returns URL or None."""
+    station = resolve_radio_station(name, config, db)
+    return station["url"] if station else None
+
+
+def resolve_radio_station(name: str, config: ConfigParser, db: Any) -> dict[str, str] | None:
+    """Case-insensitive lookup of a station. Returns the station dict or None."""
     if not name:
         return None
     key = name.strip().lower()
     for station in get_radio_stations(config, db):
         if station["name"].lower() == key:
-            return station["url"]
+            return station
     return None
 
 
@@ -204,3 +219,41 @@ def delete_radio_station(db: Any, name: str) -> bool:
     db.remove_option(DB_SECTION, key)
     log.info(f"radio: deleted station '{name}'")
     return True
+
+
+def rename_radio_station(db: Any, old_name: str, new_name: str, new_url: str | None = None) -> dict[str, str]:
+    """Rename (and optionally re-URL) a DB-backed station.
+
+    Lookup of ``old_name`` is case-insensitive. If ``new_url`` is None or
+    empty, the existing URL is kept. Returns the stored entry.
+    """
+    old_key = (old_name or "").strip().lower()
+    if not old_key:
+        raise RadioStationError("Original station name is required.")
+    clean_new_name = validate_name(new_name)
+    new_key = clean_new_name.lower()
+
+    if hasattr(db, "has_option") and not db.has_option(DB_SECTION, old_key):
+        raise RadioStationError(f"Station '{(old_name or '').strip()}' not found.")
+    if new_key != old_key and hasattr(db, "has_option") and db.has_option(DB_SECTION, new_key):
+        raise RadioStationError(f"Station '{clean_new_name}' already exists.")
+
+    # Read the current entry to preserve the URL when none is given.
+    old_url = ""
+    try:
+        for _option, _value in (db.items(DB_SECTION) or []):
+            if _option.lower() == old_key:
+                _display, old_url = _decode_db_value(_option, _value)
+                break
+    except Exception:
+        old_url = ""
+    if not old_url:
+        raise RadioStationError(f"Station '{(old_name or '').strip()}' not found.")
+
+    clean_url = validate_url(new_url) if (new_url or "").strip() else old_url
+
+    if new_key != old_key:
+        db.remove_option(DB_SECTION, old_key)
+    db.set(DB_SECTION, new_key, _encode_db_value(clean_new_name, clean_url))
+    log.info(f"radio: renamed station '{old_name}' -> '{clean_new_name}' ({clean_url})")
+    return {"name": clean_new_name, "url": clean_url, "comment": "", "source": "db"}

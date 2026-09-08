@@ -433,7 +433,16 @@ def post() -> Response:
 
         elif 'add_radio' in payload:
             url = payload['add_radio']
-            music_wrapper = _bot.cache.get_cached_wrapper_from_scrap(type='radio', url=url, user=user)
+            # Optional display name (web saved-list Play buttons send the
+            # station's custom name so renames are reflected in the queue).
+            radio_kwargs: dict[str, Any] = {'type': 'radio', 'url': url, 'user': user}
+            radio_name = (payload.get('add_radio_name') or '').strip() if hasattr(payload, 'get') else ''
+            if radio_name:
+                try:
+                    radio_kwargs['name'] = radio_stations.validate_name(radio_name)
+                except radio_stations.RadioStationError:
+                    pass
+            music_wrapper = _bot.cache.get_cached_wrapper_from_scrap(**radio_kwargs)
             _bot.playlist.append(music_wrapper)
 
             log.info("cmd: add to playlist: " + music_wrapper.format_debug_string())
@@ -772,6 +781,26 @@ def radio_manage() -> Response:
         if not radio_stations.delete_radio_station(_bot.db, name):
             return jsonify({'error': f"Station '{name}' not found."}), 404
         log.info("web: user %s (%s) deleted radio station %s" % (user, request.remote_addr, name))
+        return jsonify({'stations': radio_stations.get_radio_stations(_bot.config, _bot.db)})
+    elif action in ('rename', 'edit', 'update'):
+        old_name = (payload.get('old_name') or payload.get('name') or '').strip()
+        new_name = (payload.get('new_name') or payload.get('name') or '').strip()
+        # URL is optional: empty keeps the existing station URL so the
+        # same endpoint handles pure renames as well as URL edits.
+        new_url = (payload.get('url') or payload.get('new_url') or '').strip()
+        if not old_name:
+            return jsonify({'error': 'Original name is required.'}), 400
+        if not new_name:
+            # URL-only edit: keep the current display name.
+            new_name = old_name
+        if not new_url:
+            new_url = None
+        try:
+            station = radio_stations.rename_radio_station(_bot.db, old_name, new_name, new_url)
+        except radio_stations.RadioStationError as e:
+            return jsonify({'error': str(e)}), 400
+        log.info("web: user %s (%s) renamed radio station %s -> %s (%s)"
+                 % (user, request.remote_addr, old_name, station['name'], station['url']))
         return jsonify({'stations': radio_stations.get_radio_stations(_bot.config, _bot.db)})
     else:
         abort(400)

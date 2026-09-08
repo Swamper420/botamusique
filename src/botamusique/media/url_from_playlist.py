@@ -120,7 +120,7 @@ class PlaylistURLItem(URLItem):
         display = tr("now_playing", item=self.format_song_string(user))
 
         if self.thumbnail:
-            thumbnail_html = '<img width="80" src="data:image/jpge;base64,' + \
+            thumbnail_html = '<img width="512" src="data:image/jpeg;base64,' + \
                              self.thumbnail + '"/>'
             display += "<br />" + thumbnail_html
 

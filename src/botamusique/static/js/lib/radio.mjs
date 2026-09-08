@@ -7,10 +7,12 @@ function postForm(url, data) {
 }
 
 function sanitizeStationName(name, fallback) {
+  // Unicode-aware: keep letters (äöü...), numbers, spaces and punctuation.
+  // Only strip control characters and angle brackets (which would break
+  // Mumble chat HTML), then truncate to the server-side 64-char limit.
   const clean = (name || '')
+      .replace(/[\x00-\x1f\x7f<>]/g, '')
       .trim()
-      .replace(/\s+/g, '-')
-      .replace(/[^A-Za-z0-9_-]/g, '')
       .slice(0, 64);
   if (clean) return clean;
   return fallback || 'station';
@@ -36,8 +38,55 @@ export function initRadio() {
     saveError.style.display = msg ? '' : 'none';
   }
 
-  function playUrl(url) {
-    postForm('post', {add_radio: url});
+  function playUrl(url, name) {
+    const data = {add_radio: url};
+    if (name) data.add_radio_name = name;
+    postForm('post', data);
+  }
+
+  function renderEditForm(li, st) {
+    li.textContent = '';
+    li.className = 'list-group-item';
+
+    const form = document.createElement('div');
+    form.className = 'd-flex flex-column gap-2 w-100';
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'form-control form-control-sm';
+    nameInput.value = st.name;
+    nameInput.maxLength = 64;
+    nameInput.setAttribute('aria-label', 'Station name');
+    form.appendChild(nameInput);
+
+    const urlInput = document.createElement('input');
+    urlInput.type = 'text';
+    urlInput.className = 'form-control form-control-sm';
+    urlInput.value = st.url;
+    urlInput.setAttribute('aria-label', 'Station URL');
+    form.appendChild(urlInput);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'btn-group btn-group-sm';
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = 'btn btn-success';
+    okBtn.textContent = '✓ Save';
+    okBtn.addEventListener('click', () => {
+      renameStation(st.name, nameInput.value.trim(), urlInput.value.trim());
+    });
+    btnRow.appendChild(okBtn);
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-secondary';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => refreshSaved());
+    btnRow.appendChild(cancelBtn);
+    form.appendChild(btnRow);
+
+    li.appendChild(form);
+    nameInput.focus();
+    nameInput.select();
   }
 
   function renderSaved(stations) {
@@ -73,9 +122,17 @@ export function initRadio() {
       playBtn.textContent = '▶';
       playBtn.title = 'Play';
       playBtn.setAttribute('aria-label', 'Play ' + st.name);
-      playBtn.addEventListener('click', () => playUrl(st.url));
+      playBtn.addEventListener('click', () => playUrl(st.url, st.name));
       btnGroup.appendChild(playBtn);
       if (st.source === 'db') {
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'btn btn-secondary';
+        editBtn.textContent = '✎';
+        editBtn.title = 'Rename';
+        editBtn.setAttribute('aria-label', 'Rename ' + st.name);
+        editBtn.addEventListener('click', () => renderEditForm(li, st));
+        btnGroup.appendChild(editBtn);
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
         delBtn.className = 'btn btn-danger';
@@ -109,6 +166,23 @@ export function initRadio() {
           }
           if (saveName) saveName.value = '';
           if (saveUrl) saveUrl.value = '';
+          renderSaved(data.stations);
+        });
+  }
+
+  function renameStation(oldName, newName, url) {
+    showSaveError('');
+    if (!newName) {
+      showSaveError('Name is required.');
+      return Promise.resolve();
+    }
+    return postForm('radio', {action: 'rename', old_name: oldName, new_name: newName, url})
+        .then((r) => r.json().then((data) => ({status: r.status, data})))
+        .then(({status, data}) => {
+          if (status !== 200) {
+            showSaveError((data && data.error) || 'Could not rename station.');
+            return;
+          }
           renderSaved(data.stations);
         });
   }
@@ -166,7 +240,7 @@ export function initRadio() {
       playBtn.className = 'btn btn-info';
       playBtn.textContent = '▶ Play';
       playBtn.disabled = !st.url;
-      playBtn.addEventListener('click', () => playUrl(st.url));
+      playBtn.addEventListener('click', () => playUrl(st.url, st.name));
       btnGroup.appendChild(playBtn);
       const saveBtnEl = document.createElement('button');
       saveBtnEl.type = 'button';
