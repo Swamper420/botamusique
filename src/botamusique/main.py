@@ -280,6 +280,24 @@ def start_web_interface(addr: str, port: int, bot: MumbleBot) -> None:
     else:
         handler = logging.StreamHandler()
 
+    # Redact ?token= bearer tokens from HTTP access logs (they would
+    # otherwise persist plaintext tokens to disk/journal).
+    class _RedactTokenFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            try:
+                msg = record.getMessage()
+            except Exception:
+                return True
+            if 'token=' in msg:
+                import re as _re
+
+                redacted = _re.sub(r'(token=)[^&\s"\']*', r'\1***', msg)
+                record.msg = redacted
+                record.args = ()
+            return True
+
+    handler.addFilter(_RedactTokenFilter())
+
     # replace werkzeug_logger handlers with ours
     for existing in list(werkzeug_logger.handlers):
         if isinstance(existing, logging.StreamHandler):

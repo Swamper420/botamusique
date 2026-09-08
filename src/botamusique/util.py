@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import html
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -350,6 +351,37 @@ def is_token_expired(user_dict: dict[str, Any], ttl_seconds: int) -> bool:
         return True
 
     return (datetime.datetime.now() - created_dt) > datetime.timedelta(seconds=ttl_seconds)
+
+
+def is_ssrf_blocked_url(url: str) -> bool:
+    """Return True if a user-supplied stream/download URL targets loopback,
+    link-local (incl. cloud metadata 169.254.169.254), unspecified or
+    multicast hosts.
+
+    Private LAN ranges (10/8, 172.16/12, 192.168/16) are intentionally
+    allowed so self-hosted Icecast/SMB-adjacent LAN radios keep working.
+    Only literal-IP hosts and well-known names are checked here (no DNS
+    resolution), so this is a cheap first-line guard, not a full SSRF
+    sandbox.
+    """
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return True
+    if parts.scheme.lower() not in ("http", "https"):
+        return True
+    host = (parts.hostname or "").strip().lower().strip("[]")
+    if not host:
+        return True
+    if host in ("localhost",):
+        return True
+    if host.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast)
 
 
 def get_salted_password_hash(password: str) -> tuple[str, str]:

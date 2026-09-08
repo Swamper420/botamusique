@@ -72,6 +72,40 @@ for (const playMode in playModeBtns) {
   });
 }
 
+function isHttpUrl(value) {
+  if (typeof value !== 'string' || !value) return false;
+  try {
+    const u = new URL(value, location.origin);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// Render server-supplied text safely: plain text via textContent, or a link
+// when the server also supplied a validated http(s) URL. This replaces the
+// previous `innerHTML = item.path` pattern that executed stored HTML/JS from
+// file tags and video titles.
+function setTextOrLink(el, text, url) {
+  el.textContent = '';
+  const safeText = text == null ? '' : String(text);
+  if (url && isHttpUrl(url)) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener noreferrer nofollow';
+    const italic = document.createElement('i');
+    italic.textContent = safeText || url;
+    a.appendChild(italic);
+    el.appendChild(a);
+  } else {
+    el.textContent = safeText;
+  }
+}
+
+function setPlainText(el, value) {
+  el.textContent = value == null ? '' : String(value);
+}
+
 function request(_url, _data, refresh = false) {
   const body = new URLSearchParams(_data);
   fetch(_url, {method: 'POST', body})
@@ -102,17 +136,21 @@ function addPlaylistItem(item) {
   item_copy.classList.remove('d-none');
 
   item_copy.querySelector('.playlist-item-id').value = item.id;
-  item_copy.querySelector('.playlist-item-index').innerHTML = item.index + 1;
-  item_copy.querySelector('.playlist-item-title').innerHTML = item.title;
-  item_copy.querySelector('.playlist-item-artist').innerHTML = item.artist;
+  setPlainText(item_copy.querySelector('.playlist-item-index'), item.index + 1);
+  setPlainText(item_copy.querySelector('.playlist-item-title'), item.title);
+  setPlainText(item_copy.querySelector('.playlist-item-artist'), item.artist);
   const thumb = item_copy.querySelector('.playlist-item-thumbnail');
   thumb.src = item.thumbnail;
-  thumb.alt = limitChars(item.title);
-  item_copy.querySelector('.playlist-item-type').innerHTML = item.type;
-  item_copy.querySelector('.playlist-item-path').innerHTML = item.path;
+  thumb.alt = limitChars(String(item.title ?? ''));
+  setPlainText(item_copy.querySelector('.playlist-item-type'), item.type);
+  setTextOrLink(item_copy.querySelector('.playlist-item-path'), item.path, item.url);
+  // Playlist artist may carry a separate playlist link (url_from_playlist).
+  if (item.artist_url && isHttpUrl(item.artist_url)) {
+    setTextOrLink(item_copy.querySelector('.playlist-item-artist'), item.artist, item.artist_url);
+  }
 
   const tags = item_copy.querySelector('.playlist-item-tags');
-  tags.innerHTML = '';
+  tags.textContent = '';
 
   const tag_edit_copy = pl_tag_edit_element.cloneNode(true);
   tag_edit_copy.addEventListener('click', () => {
@@ -123,7 +161,7 @@ function addPlaylistItem(item) {
   if (item.tags.length > 0) {
     item.tags.forEach((tag_tuple) => {
       const tag_copy = tag_element.cloneNode(true);
-      tag_copy.innerHTML = tag_tuple[0];
+      setPlainText(tag_copy, tag_tuple[0]);
       tag_copy.classList.add('bg-' + tag_tuple[1]);
       tags.appendChild(tag_copy);
     });
@@ -199,9 +237,9 @@ function insertExpandPrompt(real_from, real_to, display_from, display_to, total_
   const range_el = expand_copy.querySelector('.playlist-expand-item-range');
   if (range_el) {
     if (display_from !== display_to) {
-      range_el.innerHTML = (display_from + 1) + '~' + (display_to + 1) + ' of ' + total_length + ' items';
+      setPlainText(range_el, (display_from + 1) + '~' + (display_to + 1) + ' of ' + total_length + ' items');
     } else {
-      range_el.innerHTML = display_from + ' of ' + total_length + ' items';
+      setPlainText(range_el, display_from + ' of ' + total_length + ' items');
     }
   }
   expand_copy.addEventListener('click', () => {
@@ -267,13 +305,13 @@ function checkForPlaylistUpdate() {
 playlist_table.addEventListener('click', (e) => {
   const playBtn = e.target.closest('.playlist-item-play');
   if (playBtn) {
-    const index = Number(playBtn.closest('tr').querySelector('.playlist-item-index').innerHTML) - 1;
+    const index = Number(playBtn.closest('tr').querySelector('.playlist-item-index').textContent) - 1;
     request('post', {'play_music': index});
     return;
   }
   const trashBtn = e.target.closest('.playlist-item-trash');
   if (trashBtn) {
-    const index = Number(trashBtn.closest('tr').querySelector('.playlist-item-index').innerHTML) - 1;
+    const index = Number(trashBtn.closest('tr').querySelector('.playlist-item-index').textContent) - 1;
     request('post', {'delete_music': index});
   }
 });
@@ -420,8 +458,8 @@ function displayLibraryControls(data) {
   const tags_dict = {};
   const existing_tags = [];
   document.querySelectorAll('.filter-tag').forEach((tag_el) => {
-    tags_dict[tag_el.innerHTML] = tag_el;
-    existing_tags.push(tag_el.innerHTML);
+    tags_dict[tag_el.textContent] = tag_el;
+    existing_tags.push(tag_el.textContent);
   });
   const stale_tags = [...existing_tags];
 
@@ -432,7 +470,7 @@ function displayLibraryControls(data) {
         if (idx !== -1) stale_tags.splice(idx, 1);
       } else {
         const tag_copy = lib_filter_tag_element.cloneNode(true);
-        tag_copy.innerHTML = tag;
+        setPlainText(tag_copy, tag);
         tag_copy.classList.add('bg-' + getColor(tag));
         lib_filter_tag_group.appendChild(tag_copy);
         tag_copy.addEventListener('click', () => {
@@ -452,19 +490,19 @@ function displayLibraryControls(data) {
 
 function addResultItem(item) {
   id_element.value = item.id;
-  title_element.innerHTML = item.title;
-  artist_element.innerHTML = item.artist ? ('- ' + item.artist) : '';
+  setPlainText(title_element, item.title);
+  setPlainText(artist_element, item.artist ? ('- ' + item.artist) : '');
   thumb_element.src = item.thumb;
-  thumb_element.alt = limitChars(item.title);
-  type_element.innerHTML = '[' + item.type + ']';
-  path_element.innerHTML = item.path;
+  thumb_element.alt = limitChars(String(item.title ?? ''));
+  setPlainText(type_element, '[' + item.type + ']');
+  setTextOrLink(path_element, item.path, item.url);
 
   const item_copy = item_template.cloneNode(true);
   item_copy.classList.add('library-item-active');
   item_copy.removeAttribute('id');
 
   const tags = item_copy.querySelector('.library-item-tags');
-  tags.innerHTML = '';
+  tags.textContent = '';
 
   const tag_edit_copy = tag_edit_element.cloneNode(true);
   tag_edit_copy.addEventListener('click', () => {
@@ -475,7 +513,7 @@ function addResultItem(item) {
   if (item.tags.length > 0) {
     item.tags.forEach((tag_tuple) => {
       const tag_copy = tag_element.cloneNode(true);
-      tag_copy.innerHTML = tag_tuple[0];
+      setPlainText(tag_copy, tag_tuple[0]);
       tag_copy.classList.add('bg-' + tag_tuple[1]);
       tags.appendChild(tag_copy);
     });
@@ -513,7 +551,7 @@ function addResultItem(item) {
 function getFilters(dest_page = 1) {
   const tags_list = [];
   document.querySelectorAll('.tag-clicked').forEach((tag) => {
-    tags_list.push(tag.innerHTML);
+    tags_list.push(tag.textContent);
   });
 
   const filter_types = [];
@@ -619,12 +657,12 @@ function processResults(data) {
     const items = data.items;
     if (items.length === 0) {
       lib_empty.style.display = '';
-      page_ul.innerHTML = '';
+      page_ul.textContent = '';
       return;
     }
     items.forEach((item) => addResultItem(item));
 
-    page_ul.innerHTML = '';
+    page_ul.textContent = '';
 
     let i = 1;
     if (total_pages > 25) {
@@ -634,7 +672,7 @@ function processResults(data) {
 
       const li = page_li_template.cloneNode(false);
       const a = page_no_template.cloneNode(true);
-      a.innerHTML = '&laquo;';
+      a.textContent = '«';
       a.addEventListener('click', () => updateResults(1));
       li.appendChild(a);
       page_ul.appendChild(li);
@@ -658,7 +696,7 @@ function processResults(data) {
     if (limit < total_pages) {
       const li = page_li_template.cloneNode(false);
       const a = page_no_template.cloneNode(true);
-      a.innerHTML = '&raquo;';
+      a.textContent = '»';
       a.addEventListener('click', () => updateResults(total_pages));
       li.appendChild(a);
       page_ul.appendChild(li);
@@ -678,7 +716,7 @@ const modal_tag = document.querySelector('.modal-tag');
 
 function makeTagElement(text) {
   const tag_copy = modal_tag.cloneNode(true);
-  tag_copy.querySelector('.modal-tag-text').innerHTML = text;
+  setPlainText(tag_copy.querySelector('.modal-tag-text'), text);
   tag_copy.querySelector('.modal-tag-remove').addEventListener('click', (e) => {
     e.currentTarget.parentElement.remove();
   });
@@ -687,9 +725,9 @@ function makeTagElement(text) {
 }
 
 function addTagModalShow(_id, _title, _tag_tuples) {
-  add_tag_modal_title.innerHTML = _title;
+  setPlainText(add_tag_modal_title, _title);
   add_tag_modal_item_id.value = _id;
-  add_tag_modal_tags.innerHTML = '';
+  add_tag_modal_tags.textContent = '';
   _tag_tuples.forEach((tag_tuple) => {
     add_tag_modal_tags.appendChild(makeTagElement(tag_tuple[0]));
   });
@@ -710,7 +748,7 @@ document.getElementById('addTagModalAddBtn').addEventListener('click', () => {
 document.getElementById('addTagModalSubmit').addEventListener('click', () => {
   const tags = [];
   add_tag_modal_tags.querySelectorAll('.modal-tag-text').forEach((el) => {
-    if (el.innerHTML) tags.push(el.innerHTML);
+    if (el.textContent) tags.push(el.textContent);
   });
 
   fetch('library', {
@@ -822,7 +860,7 @@ function uploadStart() {
 function setUploadError(filename, error) {
   const file_progress_item = filesProgressItem[filename];
   file_progress_item.title.classList.add('text-muted');
-  file_progress_item.error.innerHTML += 'Error: ' + error;
+  file_progress_item.error.textContent += 'Error: ' + String(error);
   setProgressBar(file_progress_item.progress, 1);
   file_progress_item.progress.classList.add('bg-danger');
   file_progress_item.progress.classList.remove('progress-bar-animated');
@@ -831,7 +869,7 @@ function setUploadError(filename, error) {
 function generateUploadProgressItem(file) {
   const item_clone = uploadModalItem.cloneNode(true);
   const title = item_clone.querySelector('.uploadItemTitle');
-  title.innerHTML = file.name;
+  setPlainText(title, file.name);
   const error = item_clone.querySelector('.uploadItemError');
   const progress = item_clone.querySelector('.uploadProgress');
   item_clone.style.display = 'block';

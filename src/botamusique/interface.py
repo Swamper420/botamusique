@@ -11,6 +11,7 @@ import time
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit, urlencode
 
 from flask import Flask, Blueprint, render_template, request, redirect, send_file, Response, jsonify, abort, session
 from werkzeug.utils import secure_filename
@@ -49,6 +50,12 @@ class ReverseProxied(object):
         proxy_set_header X-Script-Name /myprefix;
         }
 
+    Proxy headers are only honored when the direct peer is loopback
+    (i.e. a local reverse proxy). This keeps `listening_addr=127.0.0.1`
+    + proxy setups working while preventing internet clients that reach
+    Flask directly from spoofing REMOTE_ADDR/scheme and bypassing the
+    login-attempt ban.
+
     :param app: the WSGI application
     """
 
@@ -56,6 +63,8 @@ class ReverseProxied(object):
         self.app = app
 
     def __call__(self, environ: dict[str, Any], start_response: Any) -> Any:
+        if not _is_loopback_peer(environ.get('REMOTE_ADDR', '')):
+            return self.app(environ, start_response)
         script_name = environ.get('HTTP_X_SCRIPT_NAME', '')
         if script_name:
             environ['SCRIPT_NAME'] = script_name
@@ -72,6 +81,55 @@ class ReverseProxied(object):
         return self.app(environ, start_response)
 
 
+def _is_loopback_peer(remote_addr: str) -> bool:
+    """True when the direct TCP peer is this host itself (local proxy)."""
+    host = (remote_addr or '').strip().strip('[]').lower()
+    return host in ('127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost')
+
+
+def _is_safe_http_url(url: str) -> bool:
+    """True for http(s) URLs that are not SSRF-blocked (loopback/link-local)."""
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return False
+    if parts.scheme.lower() not in ('http', 'https') or not parts.hostname:
+        return False
+    return not util.is_ssrf_blocked_url(url.strip())
+
+
+def _is_path_inside(path: str, root: str) -> bool:
+    try:
+        return os.path.abspath(path) == os.path.abspath(root) or \
+            os.path.abspath(path).startswith(os.path.abspath(root) + os.sep)
+    except (OSError, ValueError):
+        return False
+
+
+def _check_same_origin() -> None:
+    """Light CSRF guard for cookie/Basic-auth POSTs: abort on mismatched Origin."""
+    origin = request.headers.get('Origin') or request.headers.get('Referer')
+    if not origin:
+        return
+    try:
+        origin_host = urlsplit(origin).netloc.lower()
+    except ValueError:
+        abort(403)
+    if origin_host and origin_host != (request.host or '').lower():
+        abort(403)
+
+
+_ALLOWED_TAG_COLORS = frozenset(
+    ['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'light', 'dark'])
+
+
+def _safe_tag_color(tag: str) -> str:
+    color = tag_color(tag)
+    return color if color in _ALLOWED_TAG_COLORS else 'secondary'
+
+
 root_dir = Path(__file__).parent
 web: Flask | None = None
 bp = Blueprint('main', __name__)
@@ -86,13 +144,36 @@ def init_app() -> None:
         template_folder=root_dir.joinpath("web"),
         static_folder=root_dir.joinpath("static"),
     )
+    # Cookie hardening that does not change the login flow: HttpOnly +
+    # SameSite=Lax mitigates session theft via XSS/CSRF; Secure is enabled
+    # in init_proxy() when the public address is https.
+    web.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+    )
     web.register_blueprint(bp)
+
+    @web.after_request
+    def _security_headers(response: Response) -> Response:
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        # Same-origin referrers keep the UI working while ensuring a
+        # ?token= URL (before its redirect) is never leaked cross-origin.
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        response.headers.setdefault('Permissions-Policy', 'microphone=(), camera=(), geolocation=()')
+        return response
 
 
 def init_proxy() -> None:
     global web
     if _bot.is_proxied:
         web.wsgi_app = ReverseProxied(web.wsgi_app)
+    try:
+        access_address = _bot.config.get('webinterface', 'access_address') or ''
+    except Exception:
+        access_address = ''
+    if access_address.strip().lower().startswith('https://'):
+        web.config.update(SESSION_COOKIE_SECURE=True)
 
 
 # https://stackoverflow.com/questions/29725217/password-protect-one-webpage-in-flask-app
@@ -196,6 +277,21 @@ def requires_auth(f: Callable[..., Any]) -> Callable[..., Any]:
                             f"web: new user access, token validated for the user: {token_user}, from ip {request.remote_addr}.")
                         session['token'] = token_hash
                         session['user'] = token_user
+                        # Drop ?token= from the address bar on plain page loads
+                        # so the bearer token does not linger in history,
+                        # bookmarks, Referer headers or proxy access logs.
+                        # XHR/fetch callers keep working because they already
+                        # hold the session cookie; only HTML navigations are
+                        # redirected to the tokenless URL.
+                        if request.method == 'GET' and request.args.get('token'):
+                            args = request.args.to_dict(flat=True)
+                            args.pop('token', None)
+                            qs = urlencode({k: v for k, v in args.items() if v != ''})
+                            clean = (request.script_root or '') + request.path + (f"?{qs}" if qs else '')
+                            resp = redirect(clean or '/', code=302)
+                            # Never store the token-bearing response.
+                            resp.headers['Cache-Control'] = 'no-store'
+                            return resp
                         return f(*args, **kwargs)
 
                     # Expired token: revoke it so the stale link stops working.
@@ -249,7 +345,7 @@ def tag_color(tag: str) -> str:
 def build_tags_color_lookup() -> dict[str, str]:
     color_lookup = {}
     for tag in _bot.music_db.query_all_tags():
-        color_lookup[tag] = tag_color(tag)
+        color_lookup[tag] = _safe_tag_color(tag)
 
     return color_lookup
 
@@ -304,19 +400,19 @@ def playlist() -> Response:
             _from = _bot.playlist.current_index - int(DEFAULT_DISPLAY_COUNT / 2)
             _to = _from - 1 + DEFAULT_DISPLAY_COUNT
 
-    tags_color_lookup = build_tags_color_lookup()  # TODO: cached this?
     items = []
 
     for index, item_wrapper in enumerate(_bot.playlist[_from: _to + 1]):
         tag_tuples = []
         for tag in item_wrapper.item().tags:
-            tag_tuples.append([tag, tags_color_lookup[tag]])
+            tag_tuples.append([tag, _safe_tag_color(tag)])
 
         item: BaseItem = item_wrapper.item()
 
         title = item.format_title()
         artist = "??"
         path = ""
+        url: str | None = None
         duration = 0
         if isinstance(item, FileItem):
             path = item.path
@@ -324,14 +420,19 @@ def playlist() -> Response:
                 artist = item.artist
             duration = item.duration
         elif isinstance(item, URLItem):
-            path = f" <a href=\"{item.url}\"><i>{item.url}</i></a>"
+            # Structured link data: the client builds the <a> element with
+            # textContent/href validation instead of injecting raw HTML.
+            path = item.url
+            url = item.url if _is_safe_http_url(item.url) else None
             duration = item.duration
         elif isinstance(item, PlaylistURLItem):
-            path = f" <a href=\"{item.url}\"><i>{item.url}</i></a>"
-            artist = f" <a href=\"{item.playlist_url}\"><i>{item.playlist_title}</i></a>"
+            path = item.url
+            url = item.url if _is_safe_http_url(item.url) else None
+            artist = item.playlist_title or "??"
             duration = item.duration
         elif isinstance(item, RadioItem):
-            path = f" <a href=\"{item.url}\"><i>{item.url}</i></a>"
+            path = item.url
+            url = item.url if _is_safe_http_url(item.url) else None
 
         thumb = ""
         if item.type != 'radio' and item.thumbnail:
@@ -339,7 +440,7 @@ def playlist() -> Response:
         else:
             thumb = "static/image/unknown-album.png"
 
-        items.append({
+        entry: dict[str, Any] = {
             'index': _from + index,
             'id': item.id,
             'type': item.display_type(),
@@ -349,7 +450,12 @@ def playlist() -> Response:
             'thumbnail': thumb,
             'tags': tag_tuples,
             'duration': duration
-        })
+        }
+        if url:
+            entry['url'] = url
+        if isinstance(item, PlaylistURLItem) and _is_safe_http_url(item.playlist_url):
+            entry['artist_url'] = item.playlist_url
+        items.append(entry)
 
     return jsonify({
         'items': items,
@@ -388,6 +494,7 @@ def status() -> Response:
 @requires_auth
 def post() -> Response:
     global log
+    _check_same_origin()
 
     payload = request.get_json() if request.is_json else request.form
     if payload:
@@ -423,7 +530,11 @@ def post() -> Response:
                 abort(404)
 
         elif 'add_url' in payload:
-            music_wrapper = _bot.cache.get_cached_wrapper_from_scrap(type='url', url=payload['add_url'], user=user)
+            raw_url = (payload['add_url'] or '').strip() if hasattr(payload, 'get') else payload['add_url']
+            normalized = util.get_url_from_input(raw_url)
+            if not normalized or util.is_ssrf_blocked_url(normalized):
+                abort(400)
+            music_wrapper = _bot.cache.get_cached_wrapper_from_scrap(type='url', url=normalized, user=user)
             _bot.playlist.append(music_wrapper)
 
             log.info("web: add to playlist: " + music_wrapper.format_debug_string())
@@ -432,7 +543,11 @@ def post() -> Response:
                 _bot.async_download_next()
 
         elif 'add_radio' in payload:
-            url = payload['add_radio']
+            url = (payload['add_radio'] or '').strip() if hasattr(payload, 'get') else payload['add_radio']
+            try:
+                url = radio_stations.validate_url(url)
+            except radio_stations.RadioStationError:
+                abort(400)
             # Optional display name (web saved-list Play buttons send the
             # station's custom name so renames are reflected in the queue).
             radio_kwargs: dict[str, Any] = {'type': 'radio', 'url': url, 'user': user}
@@ -487,9 +602,12 @@ def post() -> Response:
             _bot.playlist.remove_by_id(_id)
             item = _bot.cache.get_item_by_id(_id)
 
-            if os.path.isfile(item.uri()):
-                log.info("web: user %s (%s) deleting file %s" % (user, request.remote_addr, item.uri()))
-                os.remove(item.uri())
+            if item is not None and os.path.isfile(item.uri()):
+                music_root = os.path.abspath(_bot.music_folder)
+                tmp_root = os.path.abspath(util.solve_filepath(_bot.config.get('bot', 'tmp_folder')))
+                if _is_path_inside(item.uri(), music_root) or _is_path_inside(item.uri(), tmp_root):
+                    log.info("web: user %s (%s) deleting file %s" % (user, request.remote_addr, item.uri()))
+                    os.remove(item.uri())
 
             _bot.cache.free_and_delete(_id)
             time.sleep(0.1)
@@ -638,6 +756,7 @@ def library_info() -> Response:
 def library() -> Response:
     global log
     ITEM_PER_PAGE = 10
+    _check_same_origin()
 
     payload = request.form if request.form else request.json
     if payload:
@@ -672,19 +791,21 @@ def library() -> Response:
 
                 return redirect("./", code=302)
             elif payload['action'] == 'delete':
-                if _bot.config.getboolean("bot", "delete_allowed"):
+                if _bot.config.getboolean("bot", "delete_allowed") or _bot.is_admin(user):
                     items = _bot.cache.dicts_to_items(_bot.music_db.query_music(condition))
+                    music_root = os.path.abspath(_bot.music_folder)
+                    tmp_root = os.path.abspath(util.solve_filepath(_bot.config.get('bot', 'tmp_folder')))
                     for item in items:
                         _bot.playlist.remove_by_id(item.id)
                         item = _bot.cache.get_item_by_id(item.id)
 
-                        if os.path.isfile(item.uri()):
+                        if os.path.isfile(item.uri()) and (
+                                _is_path_inside(item.uri(), music_root) or _is_path_inside(item.uri(), tmp_root)):
                             log.info("web: user %s (%s) deleting file %s" % (user, request.remote_addr, item.uri()))
                             os.remove(item.uri())
 
                         _bot.cache.free_and_delete(item.id)
 
-                    music_root = os.path.abspath(_bot.music_folder)
                     deldir = os.path.abspath(os.path.join(music_root, payload['dir']))
                     if (deldir == music_root or deldir.startswith(music_root + os.sep)) \
                             and os.path.isdir(deldir) and len(os.listdir(deldir)) == 0:
@@ -708,8 +829,8 @@ def library() -> Response:
 
                 results = []
                 for item in items:
-                    result = {'id': item.id, 'title': item.title, 'type': item.display_type(),
-                              'tags': [(tag, tag_color(tag)) for tag in item.tags]}
+                    result: dict[str, Any] = {'id': item.id, 'title': item.title, 'type': item.display_type(),
+                              'tags': [(tag, _safe_tag_color(tag)) for tag in item.tags]}
                     if item.type != 'radio' and item.thumbnail:
                         result['thumb'] = f"data:image/PNG;base64,{item.thumbnail}"
                     else:
@@ -721,6 +842,8 @@ def library() -> Response:
                     else:
                         result['path'] = item.url
                         result['artist'] = "??"
+                        if _is_safe_http_url(item.url):
+                            result['url'] = item.url
 
                     results.append(result)
 
@@ -757,6 +880,7 @@ def radio_list() -> Response:
 @requires_auth
 def radio_manage() -> Response:
     global log
+    _check_same_origin()
     payload = request.get_json(silent=True) if request.is_json else request.form
     if not payload:
         abort(400)
@@ -843,10 +967,23 @@ def radiobrowser_search() -> Response:
 @requires_auth
 def upload() -> tuple[str, int]:
     global log
+    _check_same_origin()
 
-    if not _bot.config.getboolean("webinterface", "upload_enabled"):
+    if not _bot.config.getboolean("webinterface", "upload_enabled") and not _bot.is_admin(user):
         abort(403)
 
+    # Server-side size enforcement (the previous check was client-side only
+    # via library/info -> maxUploadFileSize). Reject oversized bodies before
+    # touching disk to avoid disk-fill DoS.
+    try:
+        max_upload = util.parse_file_size(_bot.config.get("webinterface", "max_upload_file_size"))
+    except ValueError:
+        max_upload = 0
+    if max_upload and request.content_length and request.content_length > max_upload + (1024 * 1024):
+        abort(413)
+
+    if 'file' not in request.files:
+        abort(400)
     file = request.files['file']
     if not file:
         abort(400)
@@ -871,6 +1008,16 @@ def upload() -> tuple[str, int]:
 
     music_root = os.path.abspath(_bot.music_folder)
     if "audio" in file.mimetype or "video" in file.mimetype:
+        # Per-file size check: Content-Length covers the whole multipart body,
+        # so also reject a single file that already exceeds the limit.
+        try:
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0)
+        except (OSError, ValueError):
+            file_size = 0
+        if max_upload and file_size and file_size > max_upload + (1024 * 1024):
+            abort(413)
         storagepath = os.path.abspath(os.path.join(music_root, targetdir))
         if storagepath != music_root and not storagepath.startswith(music_root + os.sep):
             abort(403)
@@ -893,6 +1040,22 @@ def upload() -> tuple[str, int]:
             return 'File existed!', 409
 
         file.save(filepath)
+        # The mimetype above is client-supplied and trivially spoofed, so
+        # verify the actual content server-side. This preserves normal audio/
+        # video uploads while blocking scripts/archives masquerading as media.
+        try:
+            import filetype as _filetype
+
+            mime = _filetype.guess_mime(filepath)
+        except Exception:
+            mime = None
+        if not mime or ('audio' not in mime and 'video' not in mime):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+            log.error(f'web: rejected upload with non-media content (detected: {mime}).')
+            return 'Unsupported media type!', 415
     else:
         log.error(f'web: unsupported file type {file.mimetype}! File was not saved.')
         return 'Unsupported media type!', 415
@@ -906,10 +1069,19 @@ def download() -> Response:
     global log
 
     if 'id' in request.args and request.args['id']:
-        item = _bot.cache.dicts_to_items(_bot.music_db.query_music(
-            Condition().and_equal('id', request.args['id'])))[0]
+        found = _bot.cache.dicts_to_items(_bot.music_db.query_music(
+            Condition().and_equal('id', request.args['id'])))
+        if not found:
+            abort(404)
+        item = found[0]
 
         requested_file = item.uri()
+        # Containment: the DB could hold an absolute path (e.g. a poisoned
+        # entry), so never serve files outside music/tmp folders.
+        music_root = os.path.abspath(_bot.music_folder)
+        tmp_root = os.path.abspath(util.solve_filepath(_bot.config.get('bot', 'tmp_folder')))
+        if not (_is_path_inside(requested_file, music_root) or _is_path_inside(requested_file, tmp_root)):
+            abort(404)
         log.info('web: user %s (%s) requested download of file %s' % (user, request.remote_addr, requested_file))
 
         try:

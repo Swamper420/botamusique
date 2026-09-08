@@ -97,6 +97,13 @@ def validate_url(url: str) -> str:
     normalized = _extract_url((url or "").strip())
     if not normalized:
         raise RadioStationError("Invalid URL.")
+    try:
+        from botamusique import util as _util
+
+        if _util.is_ssrf_blocked_url(normalized):
+            raise RadioStationError("URL targets a local or reserved address.")
+    except ImportError:
+        pass
     return normalized
 
 
