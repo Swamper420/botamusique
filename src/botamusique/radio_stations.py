@@ -218,8 +218,8 @@ def resolve_radio_station(name: str, config: ConfigParser, db: Any) -> dict[str,
     result = process.extractOne(
         key,
         station_names,
-        scorer=fuzz.token_sort_ratio,
-        score_cutoff=70,
+        scorer=fuzz.partial_ratio,
+        score_cutoff=60,
     )
     if result:
         match_name, score, _idx = result
